@@ -7,6 +7,8 @@ const typeDefs = gql`
     password: String
     secret: String
     secretPassword: String
+    username: String
+    image: String
   }
 
   type Post {
@@ -14,6 +16,8 @@ const typeDefs = gql`
     title: String
     text: String
     user: User
+    createdAt: String
+    updatedAt: String
   }
 
   type RecoverResponse {
@@ -39,6 +43,7 @@ const typeDefs = gql`
       secret: String
       secretPassword: String
     ): User
+    updateProfile(id: ID!, username: String, email: String, image: String): User
     recoverPassword(email: String): RecoverResponse
     changePassword(
       id: ID
@@ -54,6 +59,7 @@ const typeDefs = gql`
 
   type Subscription {
     userCreated: User
+    userUpdated: User
     postCreated(userId: ID!): Post
     postUpdated(userId: ID!): Post
     postDeleted(userId: ID!): DeletePostResponse

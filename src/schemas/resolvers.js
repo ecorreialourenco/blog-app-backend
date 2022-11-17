@@ -41,6 +41,16 @@ const resolvers = {
 
       return user;
     },
+    async updateProfile(_, args) {
+      const { id, username, email, image } = args;
+
+      await User.update({ username, email, image }, { where: { id } });
+
+      const user = await User.findOne({ where: { id } });
+      pubsub.publish("USER_UPDATED", { userUpdated: user });
+
+      return user;
+    },
     async recoverPassword(_, { email }) {
       const user = await User.findOne({ where: { email } });
 
@@ -123,7 +133,6 @@ const resolvers = {
     async deletePost(_, { id }) {
       const post = await Post.findOne({ where: { id } });
       if (post) {
-        
         await Post.destroy({ where: { id } });
         pubsub.publish("POST_DELETED", {
           postDeleted: { id, userId: post.userId },
@@ -142,6 +151,9 @@ const resolvers = {
   Subscription: {
     userCreated: {
       subscribe: () => pubsub.asyncIterator(["USER_CREATED"]),
+    },
+    userUpdated: {
+      subscribe: () => pubsub.asyncIterator(["USER_UPDATED"]),
     },
     postCreated: {
       subscribe: withFilter(

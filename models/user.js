@@ -19,6 +19,9 @@ module.exports = (sequelize, DataTypes) => {
         primaryKey: true,
         type: DataTypes.INTEGER,
       },
+      username: {
+        type: DataTypes.STRING,
+      },
       email: {
         type: DataTypes.STRING,
         allowNull: false,
@@ -31,6 +34,9 @@ module.exports = (sequelize, DataTypes) => {
             msg: "This field is required!",
           },
         },
+      },
+      image: {
+        type: DataTypes.TEXT,
       },
       secret: {
         type: DataTypes.STRING,
