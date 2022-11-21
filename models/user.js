@@ -9,6 +9,12 @@ module.exports = (sequelize, DataTypes) => {
      */
     static associate(models) {
       User.hasMany(models.Post);
+      User.hasMany(models.Friend, {
+        foreignKey: "requestUserId",
+      });
+      User.hasMany(models.Friend, {
+        foreignKey: "targetUserId",
+      });
     }
   }
   User.init(

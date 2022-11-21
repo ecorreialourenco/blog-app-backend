@@ -1,6 +1,21 @@
 const { gql } = require("apollo-server-express");
 
 const typeDefs = gql`
+  enum Status {
+    PENDING
+    ACEPT
+    DENIED
+    NONE
+  }
+
+  type Login {
+    id: ID!
+    email: String
+    username: String
+    image: String
+    friends: [FriendStatus]
+  }
+
   type User {
     id: ID!
     email: String
@@ -9,6 +24,14 @@ const typeDefs = gql`
     secretPassword: String
     username: String
     image: String
+    friend(id: ID!): FriendStatus
+  }
+
+  type FriendStatus {
+    id: ID
+    requestUserId: ID
+    targetUserId: ID
+    status: Status
   }
 
   type Post {
@@ -31,7 +54,8 @@ const typeDefs = gql`
   }
 
   type Query {
-    login(email: String, password: String): User
+    login(email: String, password: String): Login
+    listUsers(excludeId: ID): [User]
     getPost(id: ID): Post
     listPosts(userId: ID): [Post]
   }
@@ -42,7 +66,7 @@ const typeDefs = gql`
       password: String
       secret: String
       secretPassword: String
-    ): User
+    ): Login
     updateProfile(id: ID!, username: String, email: String, image: String): User
     recoverPassword(email: String): RecoverResponse
     changePassword(
@@ -52,6 +76,8 @@ const typeDefs = gql`
       newPassword: String!
       recoverToken: String
     ): Boolean
+    addFriend(requestId: ID!, targetId: ID): Boolean
+    updateFriend(id: ID!, status: Status!): User
     createPost(title: String, text: String, userId: ID): Post
     updatePost(id: ID!, title: String, text: String): Post
     deletePost(id: ID!): DeletePostResponse

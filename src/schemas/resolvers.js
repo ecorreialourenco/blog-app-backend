@@ -1,4 +1,5 @@
-const { User, Post, sequelize } = require("../../models");
+const { User, Post, Friend, sequelize } = require("../../models");
+const { Op } = require("sequelize");
 const bcrypt = require("bcrypt");
 const jsonwebtoken = require("jsonwebtoken");
 const { PubSub, withFilter } = require("graphql-subscriptions");
@@ -12,6 +13,14 @@ const resolvers = {
       const user = await User.findOne({ where: { email } });
       const valid = !!user && (await bcrypt.compare(password, user.password));
       return valid ? user : null;
+    },
+    async listUsers(_, { excludeId }) {
+      if (excludeId) {
+        return await User.findAll({
+          where: { id: { [Op.not]: excludeId } },
+        });
+      }
+      return await User.findAll();
     },
     async getPost(_, { id }) {
       return await Post.findOne({
@@ -98,6 +107,33 @@ const resolvers = {
       }
       return valid;
     },
+    async addFriend(_, args) {
+      const { requestId, targetId } = args;
+
+      const newFriend = await Friend.create({
+        requestUserId: requestId,
+        targetUserId: targetId,
+        status: "PENDING",
+      });
+
+      return !!newFriend;
+    },
+    async updateFriend(_, args) {
+      const { id, status } = args;
+
+      const updatedFriend = await Friend.findOne({ where: { id } });
+      if (status === "NONE") {
+        await Friend.destroy({ where: { id } });
+      } else {
+        await Friend.update({ status }, { where: id });
+      }
+
+      const user = await User.findOne({
+        where: { id: updatedFriend.targetUserId },
+      });
+
+      return user;
+    },
     async createPost(_, args) {
       const { title, text, userId } = args;
 
@@ -138,16 +174,11 @@ const resolvers = {
           postDeleted: { id, userId: post.userId },
         });
 
-        console.log(
-          "🚀 ~ file: resolvers.js ~ line 132 ~ deletePost ~ id, userId: post.userId ",
-          { id, userId: post.userId }
-        );
         return { id, userId: post.userId };
       }
       return null;
     },
   },
-
   Subscription: {
     userCreated: {
       subscribe: () => pubsub.asyncIterator(["USER_CREATED"]),
@@ -186,6 +217,26 @@ const resolvers = {
         }
       ),
     },
+  },
+
+  Login: {
+    friends: async (parent) =>
+      await Friend.findAll({
+        where: {
+          [Op.or]: [{ requestUserId: parent.id }, { targetUserId: parent.id }],
+        },
+      }),
+  },
+  User: {
+    friend: async (parent, { id }) =>
+      await Friend.findOne({
+        where: {
+          [Op.or]: [
+            { requestUserId: parent.id, targetUserId: id },
+            { requestUserId: id, targetUserId: parent.id },
+          ],
+        },
+      }),
   },
 };
 
