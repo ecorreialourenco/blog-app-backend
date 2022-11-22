@@ -3,9 +3,15 @@ const { Op } = require("sequelize");
 const bcrypt = require("bcrypt");
 const jsonwebtoken = require("jsonwebtoken");
 const { PubSub, withFilter } = require("graphql-subscriptions");
+const dotenv = require("dotenv");
+
+dotenv.config({
+  path: !!process.env.NODE_ENV ? `.env.${process.env.NODE_ENV}` : ".env",
+});
+// loading .env file
 
 const pubsub = new PubSub();
-const JWT_SECRET = "n5MqTNsiP86vivvKxEZuUtez6CubPH96C5DUm7QC9JA";
+const JWT_SECRET = process.env.JWT_SECRET;
 
 const resolvers = {
   Query: {
@@ -20,7 +26,9 @@ const resolvers = {
           where: { id: { [Op.not]: excludeId } },
         });
       }
-      return await User.findAll();
+      return await User.findAll({
+        order: sequelize.literal("username"),
+      });
     },
     async getPost(_, { id }) {
       return await Post.findOne({
@@ -116,20 +124,41 @@ const resolvers = {
         status: "PENDING",
       });
 
+      pubsub.publish("FRIENDS_CHANGED", {
+        friendsChange: {
+          friend: newFriend,
+          action: "add",
+        },
+      });
+
       return !!newFriend;
     },
     async updateFriend(_, args) {
       const { id, status } = args;
 
-      const updatedFriend = await Friend.findOne({ where: { id } });
+      const friendToUpdate = await Friend.findOne({ where: { id } });
+
       if (status === "NONE") {
         await Friend.destroy({ where: { id } });
       } else {
-        await Friend.update({ status }, { where: id });
+        await Friend.update({ status }, { where: { id } });
       }
 
+      const friendId =
+        status === "NONE"
+          ? friendToUpdate.targetUserId
+          : friendToUpdate.requestUserId;
+
       const user = await User.findOne({
-        where: { id: updatedFriend.targetUserId },
+        where: { id: friendId },
+      });
+
+      const updatedFriend = await Friend.findOne({ where: { id } });
+      pubsub.publish("FRIENDS_CHANGED", {
+        friendsChange: {
+          friend: !!updatedFriend ? updatedFriend : friendToUpdate,
+          action: status === "NONE" ? "delete" : "change",
+        },
       });
 
       return user;
@@ -137,11 +166,7 @@ const resolvers = {
     async createPost(_, args) {
       const { title, text, userId } = args;
 
-      const post = await Post.create({
-        title,
-        text,
-        userId,
-      });
+      const post = await Post.create({ title, text, userId });
 
       pubsub.publish("POST_CREATED", { postCreated: post });
 
@@ -150,13 +175,7 @@ const resolvers = {
     async updatePost(_, args) {
       const { id, title, text } = args;
 
-      await Post.update(
-        {
-          title,
-          text,
-        },
-        { where: { id } }
-      );
+      await Post.update({ title, text }, { where: { id } });
 
       const post = await Post.findOne({
         where: { id },
@@ -185,6 +204,30 @@ const resolvers = {
     },
     userUpdated: {
       subscribe: () => pubsub.asyncIterator(["USER_UPDATED"]),
+    },
+    friendsChange: {
+      subscribe: withFilter(
+        () => pubsub.asyncIterator(["FRIENDS_CHANGED"]),
+        (payload, variables) => {
+          console.log(
+            "🚀 ~ file: resolvers.js ~ line 205 ~ variables",
+            variables
+          );
+          console.log(
+            "🚀 ~ file: resolvers.js ~ line 205 ~ payload",
+            payload.friendsChange
+          );
+
+          return (
+            !!payload &&
+            payload.friendsChange &&
+            (payload.friendsChange.friend.requestUserId.toString() ===
+              variables.userId.toString() ||
+              payload.friendsChange.friend.targetUserId.toString() ===
+                variables.userId.toString())
+          );
+        }
+      ),
     },
     postCreated: {
       subscribe: withFilter(

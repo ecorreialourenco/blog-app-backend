@@ -53,6 +53,11 @@ const typeDefs = gql`
     userId: ID
   }
 
+  type UsersSubscription {
+    friend: FriendStatus
+    action: String
+  }
+
   type Query {
     login(email: String, password: String): Login
     listUsers(excludeId: ID): [User]
@@ -86,6 +91,7 @@ const typeDefs = gql`
   type Subscription {
     userCreated: User
     userUpdated: User
+    friendsChange(userId: ID!): UsersSubscription
     postCreated(userId: ID!): Post
     postUpdated(userId: ID!): Post
     postDeleted(userId: ID!): DeletePostResponse
