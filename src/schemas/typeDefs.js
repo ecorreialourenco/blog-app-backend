@@ -58,11 +58,18 @@ const typeDefs = gql`
     action: String
   }
 
+  type UserFriendsSubscription {
+    post: Post
+    action: String
+    userId: ID
+  }
+
   type Query {
     login(email: String, password: String): Login
     listUsers(excludeId: ID): [User]
     getPost(id: ID): Post
     listPosts(userId: ID): [Post]
+    listFriendsPosts(userId: ID): [Post]
   }
 
   type Mutation {
@@ -95,6 +102,7 @@ const typeDefs = gql`
     postCreated(userId: ID!): Post
     postUpdated(userId: ID!): Post
     postDeleted(userId: ID!): DeletePostResponse
+    friendsPostsChanges(userId: ID!): UserFriendsSubscription
   }
 `;
 

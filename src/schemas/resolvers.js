@@ -4,6 +4,7 @@ const bcrypt = require("bcrypt");
 const jsonwebtoken = require("jsonwebtoken");
 const { PubSub, withFilter } = require("graphql-subscriptions");
 const dotenv = require("dotenv");
+const getFriendsIds = require("../helpers/getFriendsIds");
 
 dotenv.config({
   path: !!process.env.NODE_ENV ? `.env.${process.env.NODE_ENV}` : ".env",
@@ -38,6 +39,14 @@ const resolvers = {
     async listPosts(_, { userId }) {
       return await Post.findAll({
         where: { userId },
+        order: sequelize.literal("createdAt DESC"),
+      });
+    },
+    async listFriendsPosts(_, { userId }) {
+      const ids = await getFriendsIds(userId);
+
+      return await Post.findAll({
+        where: { userId: { [Op.in]: ids } },
         order: sequelize.literal("createdAt DESC"),
       });
     },
@@ -170,6 +179,15 @@ const resolvers = {
 
       pubsub.publish("POST_CREATED", { postCreated: post });
 
+      const friendsIds = await getFriendsIds(userId);
+      pubsub.publish("FRIENDS_POST_CHANGED", {
+        friendsPostsChanges: {
+          post,
+          action: "added",
+          ids: friendsIds,
+        },
+      });
+
       return post;
     },
     async updatePost(_, args) {
@@ -183,6 +201,15 @@ const resolvers = {
 
       pubsub.publish("POST_UPDATED", { postUpdated: post });
 
+      const friendsIds = await getFriendsIds(post.userId);
+      pubsub.publish("FRIENDS_POST_CHANGED", {
+        friendsPostsChanges: {
+          post,
+          action: "updated",
+          ids: friendsIds,
+        },
+      });
+
       return post;
     },
     async deletePost(_, { id }) {
@@ -191,6 +218,15 @@ const resolvers = {
         await Post.destroy({ where: { id } });
         pubsub.publish("POST_DELETED", {
           postDeleted: { id, userId: post.userId },
+        });
+
+        const friendsIds = await getFriendsIds(post.userId);
+        pubsub.publish("FRIENDS_POST_CHANGED", {
+          friendsPostsChanges: {
+            post,
+            action: "deleted",
+            ids: friendsIds,
+          },
         });
 
         return { id, userId: post.userId };
@@ -209,23 +245,15 @@ const resolvers = {
       subscribe: withFilter(
         () => pubsub.asyncIterator(["FRIENDS_CHANGED"]),
         (payload, variables) => {
-          console.log(
-            "🚀 ~ file: resolvers.js ~ line 205 ~ variables",
-            variables
-          );
-          console.log(
-            "🚀 ~ file: resolvers.js ~ line 205 ~ payload",
-            payload.friendsChange
-          );
+          if (payload.friendsChange) {
+            const { friend } = payload.friendsChange;
 
-          return (
-            !!payload &&
-            payload.friendsChange &&
-            (payload.friendsChange.friend.requestUserId.toString() ===
-              variables.userId.toString() ||
-              payload.friendsChange.friend.targetUserId.toString() ===
-                variables.userId.toString())
-          );
+            return (
+              friend.requestUserId.toString() === variables.userId.toString() ||
+              friend.targetUserId.toString() === variables.userId.toString()
+            );
+          }
+          return null;
         }
       ),
     },
@@ -250,14 +278,18 @@ const resolvers = {
     postDeleted: {
       subscribe: withFilter(
         () => pubsub.asyncIterator(["POST_DELETED"]),
-        (payload, variables) => {
-          return (
-            !!payload &&
-            payload.postDeleted &&
-            payload.postDeleted.userId.toString() ===
-              variables.userId.toString()
-          );
-        }
+        (payload, variables) =>
+          !!payload &&
+          payload.postDeleted &&
+          payload.postDeleted.userId.toString() === variables.userId.toString()
+      ),
+    },
+    friendsPostsChanges: {
+      subscribe: withFilter(
+        () => pubsub.asyncIterator(["FRIENDS_POST_CHANGED"]),
+        async (payload, variables) =>
+          !!payload &&
+          payload.friendsPostsChanges.ids.includes(parseInt(variables.userId))
       ),
     },
   },
@@ -280,6 +312,10 @@ const resolvers = {
           ],
         },
       }),
+  },
+  Post: {
+    user: async (parent) =>
+      await User.findOne({ where: { id: parent.userId } }),
   },
 };
 
