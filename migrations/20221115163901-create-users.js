@@ -26,7 +26,6 @@ module.exports = {
       secret: {
         allowNull: false,
         type: Sequelize.STRING,
-        unique: true,
       },
       secret_password: {
         allowNull: false,

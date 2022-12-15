@@ -32,6 +32,7 @@ const typeDefs = gql`
     requestUserId: ID
     targetUserId: ID
     status: Status
+    block: Boolean
   }
 
   type Post {
@@ -43,6 +44,16 @@ const typeDefs = gql`
     updatedAt: String
   }
 
+  type UserSubscriptionsResponse {
+    user: User
+    totalPages: Int
+  }
+
+  type PostSubscriptionsResponse {
+    post: Post
+    totalPages: Int
+  }
+
   type RecoverResponse {
     token: String
     secret: String
@@ -51,25 +62,54 @@ const typeDefs = gql`
   type DeletePostResponse {
     id: ID
     userId: ID
+    totalPages: Int
   }
 
-  type UsersSubscription {
+  type UsersFriendsSubscription {
     friend: FriendStatus
     action: String
   }
 
   type UserFriendsSubscription {
     post: Post
+    totalPages: Int
     action: String
     userId: ID
   }
 
+  type PaginatedUsers {
+    users: [User]
+    totalPages: Int
+    totalRecords: Int
+  }
+
+  type PaginatedPosts {
+    posts: [Post]
+    totalPages: Int
+  }
+
+  input ListUsersFilters {
+    excludeId: ID!
+    page: Int!
+    statusIn: [Status]
+    statusNotIn: [Status]
+    search: String
+  }
+
   type Query {
     login(email: String, password: String): Login
-    listUsers(excludeId: ID): [User]
+    listUsers(excludeId: ID!, page: Int!, search: String): PaginatedUsers
+    listFriends(filters: ListUsersFilters): PaginatedUsers
+    listRequests(
+      userId: ID!
+      page: Int!
+      search: String
+      own: Boolean
+    ): PaginatedUsers
+    listBlockedUsers(excludeId: ID!, page: Int!, search: String): PaginatedUsers
     getPost(id: ID): Post
-    listPosts(userId: ID): [Post]
-    listFriendsPosts(userId: ID): [Post]
+    listPosts(userId: ID, page: Int): PaginatedPosts
+    listFriendsPosts(userId: ID, page: Int): PaginatedPosts
   }
 
   type Mutation {
@@ -96,11 +136,11 @@ const typeDefs = gql`
   }
 
   type Subscription {
-    userCreated: User
-    userUpdated: User
-    friendsChange(userId: ID!): UsersSubscription
-    postCreated(userId: ID!): Post
-    postUpdated(userId: ID!): Post
+    userCreated: UserSubscriptionsResponse
+    userUpdated: UserSubscriptionsResponse
+    friendsChange(userId: ID!): UsersFriendsSubscription
+    postCreated(userId: ID!): PostSubscriptionsResponse
+    postUpdated(userId: ID!): PostSubscriptionsResponse
     postDeleted(userId: ID!): DeletePostResponse
     friendsPostsChanges(userId: ID!): UserFriendsSubscription
   }

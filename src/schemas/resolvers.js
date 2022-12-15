@@ -5,6 +5,9 @@ const jsonwebtoken = require("jsonwebtoken");
 const { PubSub, withFilter } = require("graphql-subscriptions");
 const dotenv = require("dotenv");
 const getFriendsIds = require("../helpers/getFriendsIds");
+const { ROW_LIMIT } = require("../variables/constants");
+const getUsersCount = require("../helpers/getUsersCount");
+const getPostsCountById = require("../helpers/getPostsCountById");
 
 dotenv.config({
   path: !!process.env.NODE_ENV ? `.env.${process.env.NODE_ENV}` : ".env",
@@ -21,34 +24,253 @@ const resolvers = {
       const valid = !!user && (await bcrypt.compare(password, user.password));
       return valid ? user : null;
     },
-    async listUsers(_, { excludeId }) {
-      if (excludeId) {
-        return await User.findAll({
-          where: { id: { [Op.not]: excludeId } },
-        });
-      }
-      return await User.findAll({
-        order: sequelize.literal("username"),
+    async listUsers(_, { excludeId, page, search }) {
+      // Finds the users list who block this user
+      const blockedBy = await Friend.findAll({
+        where: {
+          requestUserId: excludeId,
+          block: true,
+        },
       });
+      // Get the id's of the users who have blocked the user
+      const excludeIds = blockedBy.map((friend) => friend.targetUserId);
+      excludeIds.push({ excludeId });
+
+      if (!!search) {
+        userFilters = {
+          [Op.or]: [
+            {
+              id: { [Op.notIn]: excludeIds },
+              username: {
+                [Op.startsWith]: search,
+              },
+            },
+            {
+              id: { [Op.notIn]: excludeIds },
+              email: {
+                [Op.startsWith]: search,
+              },
+            },
+          ],
+        };
+      } else {
+        userFilters = {
+          id: { [Op.notIn]: excludeIds },
+        };
+      }
+
+      const users = await User.findAll({
+        where: userFilters,
+        order: sequelize.literal("username"),
+        offset: !!page ? page * ROW_LIMIT : 0,
+        limit: ROW_LIMIT,
+      });
+      const total = await User.count({ where: userFilters });
+      const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
+
+      return { users, totalPages, totalRecords: total };
+    },
+    async listFriends(_, { filters }) {
+      const { excludeId, page, statusIn, statusNotIn, search } = filters;
+      // Check not blocked users friends with or without specific status
+      let statusFilters = {};
+
+      if (!!statusIn && statusIn.length) {
+        statusFilters = {
+          [Op.or]: [
+            {
+              requestUserId: excludeId,
+              status: { [Op.in]: statusIn },
+            },
+            {
+              targetUserId: excludeId,
+              status: { [Op.in]: statusIn },
+            },
+          ],
+        };
+      } else if (!!statusNotIn && statusNotIn.length) {
+        statusFilters = {
+          [Op.or]: [
+            {
+              requestUserId: excludeId,
+              status: { [Op.notIn]: statusIn },
+            },
+            {
+              targetUserId: excludeId,
+              status: { [Op.notIn]: statusIn },
+            },
+          ],
+        };
+      } else {
+        statusFilters = {
+          [Op.or]: [{ requestUserId: excludeId }, { targetUserId: excludeId }],
+        };
+      }
+
+      const filteredFriendsByStatus = await Friend.findAll({
+        where: statusFilters,
+      });
+
+      const friendsIds = filteredFriendsByStatus.map((friend) =>
+        friend.targetUserId !== parseInt(excludeId)
+          ? friend.targetUserId
+          : friend.requestUserId
+      );
+      let userFilters = {};
+      if (!!search) {
+        userFilters = {
+          [Op.or]: [
+            {
+              id: { [Op.in]: friendsIds },
+              username: {
+                [Op.startsWith]: search,
+              },
+            },
+            {
+              id: { [Op.in]: friendsIds },
+              email: {
+                [Op.startsWith]: search,
+              },
+            },
+          ],
+        };
+      } else {
+        userFilters = {
+          id: { [Op.in]: friendsIds },
+        };
+      }
+
+      const users = await User.findAll({
+        where: userFilters,
+        order: sequelize.literal("username"),
+        offset: !!page ? page * ROW_LIMIT : 0,
+        limit: ROW_LIMIT,
+      });
+      const total = await User.count({ where: userFilters });
+      const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
+
+      return { users, totalPages, totalRecords: total };
+    },
+    async listRequests(_, { userId, page, search, own }) {
+      const friendsFilters = own
+        ? { requestUserId: userId, status: "PENDING", block: false }
+        : { targetUserId: userId, status: "PENDING", block: false };
+
+      const requests = await Friend.findAll({ where: friendsFilters });
+
+      const friendsIds = requests.map((friend) =>
+        own ? friend.targetUserId : friend.requestUserId
+      );
+
+      let userFilters = {};
+      if (!!search) {
+        userFilters = {
+          [Op.or]: [
+            {
+              id: { [Op.in]: friendsIds },
+              username: {
+                [Op.startsWith]: search,
+              },
+            },
+            {
+              id: { [Op.in]: friendsIds },
+              email: {
+                [Op.startsWith]: search,
+              },
+            },
+          ],
+        };
+      } else {
+        userFilters = {
+          id: { [Op.in]: friendsIds },
+        };
+      }
+
+      const users = await User.findAll({
+        where: userFilters,
+        order: sequelize.literal("username"),
+        offset: !!page ? page * ROW_LIMIT : 0,
+        limit: ROW_LIMIT,
+      });
+      const total = await User.count({ where: userFilters });
+      const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
+
+      return { users, totalPages, totalRecords: total };
+    },
+    async listBlockedUsers(_, { excludeId, page, search }) {
+      const usersBlocked = await Friend.findAll({
+        where: {
+          targetUserId: excludeId,
+          block: true,
+        },
+      });
+
+      const excludeIds = usersBlocked.map((friend) => friend.requestUserId);
+      excludeIds.push({ excludeId });
+
+      let userFilters = {};
+      if (!!search) {
+        userFilters = {
+          [Op.or]: [
+            {
+              id: { [Op.in]: excludeIds },
+              username: {
+                [Op.startsWith]: search,
+              },
+            },
+            {
+              id: { [Op.in]: excludeIds },
+              email: {
+                [Op.startsWith]: search,
+              },
+            },
+          ],
+        };
+      } else {
+        userFilters = {
+          id: { [Op.in]: excludeIds },
+        };
+      }
+
+      const users = await User.findAll({
+        where: userFilters,
+        order: sequelize.literal("username"),
+        offset: !!page ? page * ROW_LIMIT : 0,
+        limit: ROW_LIMIT,
+      });
+      const total = await User.count({ where: userFilters });
+      const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
+
+      return { users, totalPages, totalRecords: total };
     },
     async getPost(_, { id }) {
       return await Post.findOne({
         where: { id },
       });
     },
-    async listPosts(_, { userId }) {
-      return await Post.findAll({
+    async listPosts(_, { userId, page }) {
+      const posts = await Post.findAll({
         where: { userId },
         order: sequelize.literal("createdAt DESC"),
+        offset: !!page ? page * ROW_LIMIT : 0,
+        limit: ROW_LIMIT,
       });
+      const totalPages = await getPostsCountById(userId);
+
+      return { posts, totalPages };
     },
-    async listFriendsPosts(_, { userId }) {
+    async listFriendsPosts(_, { userId, page }) {
       const ids = await getFriendsIds(userId);
 
-      return await Post.findAll({
+      const posts = await Post.findAll({
         where: { userId: { [Op.in]: ids } },
         order: sequelize.literal("createdAt DESC"),
+        offset: !!page ? page * ROW_LIMIT : 0,
+        limit: ROW_LIMIT,
       });
+      const totalPages = await getPostsCountById(ids);
+
+      return { posts, totalPages };
     },
   },
 
@@ -62,8 +284,9 @@ const resolvers = {
         secret,
         secretPassword: await bcrypt.hash(secretPassword, 10),
       });
+      const totalPages = await getUsersCount();
 
-      pubsub.publish("USER_CREATED", { userCreated: user });
+      pubsub.publish("USER_CREATED", { userCreated: { user, totalPages } });
 
       return user;
     },
@@ -73,7 +296,9 @@ const resolvers = {
       await User.update({ username, email, image }, { where: { id } });
 
       const user = await User.findOne({ where: { id } });
-      pubsub.publish("USER_UPDATED", { userUpdated: user });
+      const totalPages = await getUsersCount();
+
+      pubsub.publish("USER_UPDATED", { userUpdated: { user, totalPages } });
 
       return user;
     },
@@ -131,6 +356,7 @@ const resolvers = {
         requestUserId: requestId,
         targetUserId: targetId,
         status: "PENDING",
+        block: false,
       });
 
       pubsub.publish("FRIENDS_CHANGED", {
@@ -176,15 +402,17 @@ const resolvers = {
       const { title, text, userId } = args;
 
       const post = await Post.create({ title, text, userId });
-
-      pubsub.publish("POST_CREATED", { postCreated: post });
+      const totalPages = await getPostsCountById(userId);
+      pubsub.publish("POST_CREATED", { postCreated: { post, totalPages } });
 
       const friendsIds = await getFriendsIds(userId);
+      const friendTotalPages = await getPostsCountById(friendsIds);
       pubsub.publish("FRIENDS_POST_CHANGED", {
         friendsPostsChanges: {
           post,
           action: "added",
           ids: friendsIds,
+          totalPages: friendTotalPages,
         },
       });
 
@@ -198,15 +426,17 @@ const resolvers = {
       const post = await Post.findOne({
         where: { id },
       });
-
-      pubsub.publish("POST_UPDATED", { postUpdated: post });
+      const totalPages = await getPostsCountById(userId);
+      pubsub.publish("POST_UPDATED", { postUpdated: { post, totalPages } });
 
       const friendsIds = await getFriendsIds(post.userId);
+      const friendTotalPages = await getPostsCountById(friendsIds);
       pubsub.publish("FRIENDS_POST_CHANGED", {
         friendsPostsChanges: {
           post,
           action: "updated",
           ids: friendsIds,
+          totalPages: friendTotalPages,
         },
       });
 
@@ -216,16 +446,19 @@ const resolvers = {
       const post = await Post.findOne({ where: { id } });
       if (post) {
         await Post.destroy({ where: { id } });
+        const totalPages = await getPostsCountById(userId);
         pubsub.publish("POST_DELETED", {
-          postDeleted: { id, userId: post.userId },
+          postDeleted: { id, userId: post.userId, totalPages },
         });
 
         const friendsIds = await getFriendsIds(post.userId);
+        const friendTotalPages = await getPostsCountById(friendsIds);
         pubsub.publish("FRIENDS_POST_CHANGED", {
           friendsPostsChanges: {
             post,
             action: "deleted",
             ids: friendsIds,
+            totalPages: friendTotalPages,
           },
         });
 
@@ -260,10 +493,12 @@ const resolvers = {
     postCreated: {
       subscribe: withFilter(
         () => pubsub.asyncIterator(["POST_CREATED"]),
-        (payload, variables) =>
+        async (payload, variables) =>
           !!payload &&
           payload.postCreated &&
-          payload.postCreated.userId.toString() === variables.userId.toString()
+          payload.postCreated.post &&
+          payload.postCreated.post.userId.toString() ===
+            variables.userId.toString()
       ),
     },
     postUpdated: {
