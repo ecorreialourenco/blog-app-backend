@@ -8,14 +8,6 @@ const typeDefs = gql`
     NONE
   }
 
-  type Login {
-    id: ID!
-    email: String
-    username: String
-    image: String
-    friends: [FriendStatus]
-  }
-
   type User {
     id: ID!
     email: String
@@ -89,24 +81,26 @@ const typeDefs = gql`
   }
 
   input ListUsersFilters {
-    excludeId: ID!
     page: Int!
     statusIn: [Status]
     statusNotIn: [Status]
     search: String
   }
 
+  input listRequestsFilters {
+    userId: ID!
+    page: Int!
+    search: String
+    own: Boolean
+  }
+
   type Query {
-    login(email: String, password: String): Login
-    listUsers(excludeId: ID!, page: Int!, search: String): PaginatedUsers
+    login(email: String, password: String): String
+    getUser(id: ID!): User
+    listUsers(page: Int!, search: String): PaginatedUsers
     listFriends(filters: ListUsersFilters): PaginatedUsers
-    listRequests(
-      userId: ID!
-      page: Int!
-      search: String
-      own: Boolean
-    ): PaginatedUsers
-    listBlockedUsers(excludeId: ID!, page: Int!, search: String): PaginatedUsers
+    listRequests(filters: listRequestsFilters): PaginatedUsers
+    listBlockedUsers(page: Int!, search: String): PaginatedUsers
     getPost(id: ID): Post
     listPosts(userId: ID, page: Int): PaginatedPosts
     listFriendsPosts(userId: ID, page: Int): PaginatedPosts
@@ -118,7 +112,7 @@ const typeDefs = gql`
       password: String
       secret: String
       secretPassword: String
-    ): Login
+    ): String
     updateProfile(id: ID!, username: String, email: String, image: String): User
     recoverPassword(email: String): RecoverResponse
     changePassword(
@@ -129,7 +123,7 @@ const typeDefs = gql`
       recoverToken: String
     ): Boolean
     addFriend(requestId: ID!, targetId: ID): Boolean
-    updateFriend(id: ID!, status: Status!): User
+    updateFriend(id: ID!, status: Status!, block: Boolean): User
     createPost(title: String, text: String, userId: ID): Post
     updatePost(id: ID!, title: String, text: String): Post
     deletePost(id: ID!): DeletePostResponse

@@ -12,7 +12,9 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const typeDefs = require("./schemas/typeDefs");
 const resolvers = require("./schemas/resolvers");
+const jsonwebtoken = require("jsonwebtoken");
 
+const JWT_SECRET = process.env.JWT_SECRET;
 const PORT = 4000;
 
 // Create schema, which will be used separately by ApolloServer and
@@ -53,8 +55,36 @@ const server = new ApolloServer({
 
 const startServer = async () => {
   await server.start();
-  app.use("/graphql", cors(), bodyParser.json(), expressMiddleware(server));
 
+  app.use(
+    "/graphql",
+    cors(),
+    bodyParser.json(),
+    expressMiddleware(server, {
+      context: async ({ req }) => {
+        let user = null;
+        const authorization = req?.headers.authorization;
+
+        if (!!authorization) {
+          let token = "";
+          if (authorization.includes(" ")) {
+            token = authorization.split(" ")[1];
+          } else {
+            token = authorization;
+          }
+          const userToken = jsonwebtoken.verify(
+            token,
+            JWT_SECRET,
+            (err, decoded) => !err && decoded
+          );
+          if (!!userToken) {
+            user = userToken.user;
+          }
+        }
+        return user;
+      },
+    })
+  );
   // Now that our HTTP server is fully set up, actually listen.
   httpServer.listen(PORT, () => {
     console.log(`🚀 Query endpoint ready at http://localhost:${PORT}/graphql`);
@@ -62,8 +92,6 @@ const startServer = async () => {
       `🚀 Subscription endpoint ready at ws://localhost:${PORT}/graphql`
     );
   });
-
-  // In the background, increment a number every second and notify subscribers when it changes.
 };
 
 startServer();

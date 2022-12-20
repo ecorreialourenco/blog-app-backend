@@ -8,6 +8,8 @@ const getFriendsIds = require("../helpers/getFriendsIds");
 const { ROW_LIMIT } = require("../variables/constants");
 const getUsersCount = require("../helpers/getUsersCount");
 const getPostsCountById = require("../helpers/getPostsCountById");
+const { GraphQLError } = require("graphql");
+const { forbidenError } = require("../helpers/forbiden");
 
 dotenv.config({
   path: !!process.env.NODE_ENV ? `.env.${process.env.NODE_ENV}` : ".env",
@@ -20,451 +22,626 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const resolvers = {
   Query: {
     async login(_, { email, password }) {
-      const user = await User.findOne({ where: { email } });
-      const valid = !!user && (await bcrypt.compare(password, user.password));
-      return valid ? user : null;
-    },
-    async listUsers(_, { excludeId, page, search }) {
-      // Finds the users list who block this user
-      const blockedBy = await Friend.findAll({
-        where: {
-          requestUserId: excludeId,
-          block: true,
-        },
-      });
-      // Get the id's of the users who have blocked the user
-      const excludeIds = blockedBy.map((friend) => friend.targetUserId);
-      excludeIds.push({ excludeId });
-
-      if (!!search) {
-        userFilters = {
-          [Op.or]: [
+      try {
+        const user = await User.findOne({ where: { email } });
+        const valid = !!user && (await bcrypt.compare(password, user.password));
+        if (valid) {
+          return jsonwebtoken.sign(
             {
+              user: {
+                id: user.id,
+                username: user.username,
+                email: user.email,
+                image: user.image,
+              },
+            },
+            JWT_SECRET,
+            {
+              expiresIn: "1d",
+            }
+          );
+        }
+
+        return null;
+      } catch (err) {
+        return err;
+      }
+    },
+    async getUser(_, { id }, context) {
+      try {
+        if (context && context.id) {
+          const user = await User.findOne({
+            where: { id },
+          });
+
+          return user;
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
+      }
+    },
+    async listUsers(_, { page, search }, context) {
+      try {
+        if (context && context.id) {
+          // Finds the users list who block this user
+          const blockedBy = await Friend.findAll({
+            where: {
+              requestUserId: context.id,
+              block: true,
+            },
+          });
+          // Get the id's of the users who have blocked the user
+          const excludeIds = blockedBy.map((friend) => friend.targetUserId);
+          excludeIds.push(context.id);
+
+          if (!!search) {
+            userFilters = {
+              [Op.or]: [
+                {
+                  id: { [Op.notIn]: excludeIds },
+                  username: {
+                    [Op.startsWith]: search,
+                  },
+                },
+                {
+                  id: { [Op.notIn]: excludeIds },
+                  email: {
+                    [Op.startsWith]: search,
+                  },
+                },
+              ],
+            };
+          } else {
+            userFilters = {
               id: { [Op.notIn]: excludeIds },
-              username: {
-                [Op.startsWith]: search,
-              },
-            },
-            {
-              id: { [Op.notIn]: excludeIds },
-              email: {
-                [Op.startsWith]: search,
-              },
-            },
-          ],
-        };
-      } else {
-        userFilters = {
-          id: { [Op.notIn]: excludeIds },
-        };
+            };
+          }
+
+          const users = await User.findAll({
+            where: userFilters,
+            order: sequelize.literal("username"),
+            offset: !!page ? page * ROW_LIMIT : 0,
+            limit: ROW_LIMIT,
+          });
+          const total = await User.count({ where: userFilters });
+          const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
+
+          return { users, totalPages, totalRecords: total };
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
       }
-
-      const users = await User.findAll({
-        where: userFilters,
-        order: sequelize.literal("username"),
-        offset: !!page ? page * ROW_LIMIT : 0,
-        limit: ROW_LIMIT,
-      });
-      const total = await User.count({ where: userFilters });
-      const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
-
-      return { users, totalPages, totalRecords: total };
     },
-    async listFriends(_, { filters }) {
-      const { excludeId, page, statusIn, statusNotIn, search } = filters;
-      // Check not blocked users friends with or without specific status
-      let statusFilters = {};
+    async listFriends(_, { filters }, context) {
+      try {
+        if (context && context.id) {
+          const { page, statusIn, statusNotIn, search } = filters;
+          // Check not blocked users friends with or without specific status
+          let statusFilters = {};
 
-      if (!!statusIn && statusIn.length) {
-        statusFilters = {
-          [Op.or]: [
-            {
-              requestUserId: excludeId,
-              status: { [Op.in]: statusIn },
-            },
-            {
-              targetUserId: excludeId,
-              status: { [Op.in]: statusIn },
-            },
-          ],
-        };
-      } else if (!!statusNotIn && statusNotIn.length) {
-        statusFilters = {
-          [Op.or]: [
-            {
-              requestUserId: excludeId,
-              status: { [Op.notIn]: statusIn },
-            },
-            {
-              targetUserId: excludeId,
-              status: { [Op.notIn]: statusIn },
-            },
-          ],
-        };
-      } else {
-        statusFilters = {
-          [Op.or]: [{ requestUserId: excludeId }, { targetUserId: excludeId }],
-        };
-      }
+          if (!!statusIn && statusIn.length) {
+            statusFilters = {
+              [Op.or]: [
+                {
+                  requestUserId: context.id,
+                  status: { [Op.in]: statusIn },
+                },
+                {
+                  targetUserId: context.id,
+                  status: { [Op.in]: statusIn },
+                },
+              ],
+            };
+          } else if (!!statusNotIn && statusNotIn.length) {
+            statusFilters = {
+              [Op.or]: [
+                {
+                  requestUserId: context.id,
+                  status: { [Op.notIn]: statusIn },
+                },
+                {
+                  targetUserId: context.id,
+                  status: { [Op.notIn]: statusIn },
+                },
+              ],
+            };
+          } else {
+            statusFilters = {
+              [Op.or]: [
+                { requestUserId: context.id },
+                { targetUserId: context.id },
+              ],
+            };
+          }
 
-      const filteredFriendsByStatus = await Friend.findAll({
-        where: statusFilters,
-      });
+          const filteredFriendsByStatus = await Friend.findAll({
+            where: statusFilters,
+          });
 
-      const friendsIds = filteredFriendsByStatus.map((friend) =>
-        friend.targetUserId !== parseInt(excludeId)
-          ? friend.targetUserId
-          : friend.requestUserId
-      );
-      let userFilters = {};
-      if (!!search) {
-        userFilters = {
-          [Op.or]: [
-            {
+          const friendsIds = filteredFriendsByStatus.map((friend) =>
+            friend.targetUserId !== parseInt(context.id)
+              ? friend.targetUserId
+              : friend.requestUserId
+          );
+          let userFilters = {};
+          if (!!search) {
+            userFilters = {
+              [Op.or]: [
+                {
+                  id: { [Op.in]: friendsIds },
+                  username: {
+                    [Op.startsWith]: search,
+                  },
+                },
+                {
+                  id: { [Op.in]: friendsIds },
+                  email: {
+                    [Op.startsWith]: search,
+                  },
+                },
+              ],
+            };
+          } else {
+            userFilters = {
               id: { [Op.in]: friendsIds },
-              username: {
-                [Op.startsWith]: search,
-              },
-            },
-            {
-              id: { [Op.in]: friendsIds },
-              email: {
-                [Op.startsWith]: search,
-              },
-            },
-          ],
-        };
-      } else {
-        userFilters = {
-          id: { [Op.in]: friendsIds },
-        };
+            };
+          }
+
+          const users = await User.findAll({
+            where: userFilters,
+            order: sequelize.literal("username"),
+            offset: !!page ? page * ROW_LIMIT : 0,
+            limit: ROW_LIMIT,
+          });
+          const total = await User.count({ where: userFilters });
+          const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
+
+          return { users, totalPages, totalRecords: total };
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
       }
-
-      const users = await User.findAll({
-        where: userFilters,
-        order: sequelize.literal("username"),
-        offset: !!page ? page * ROW_LIMIT : 0,
-        limit: ROW_LIMIT,
-      });
-      const total = await User.count({ where: userFilters });
-      const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
-
-      return { users, totalPages, totalRecords: total };
     },
-    async listRequests(_, { userId, page, search, own }) {
-      const friendsFilters = own
-        ? { requestUserId: userId, status: "PENDING", block: false }
-        : { targetUserId: userId, status: "PENDING", block: false };
+    async listRequests(_, { filters }, context) {
+      try {
+        if (context && context.id) {
+          const { userId, page, search, own } = filters;
 
-      const requests = await Friend.findAll({ where: friendsFilters });
+          const friendsFilters = own
+            ? { requestUserId: userId, status: "PENDING", block: false }
+            : { targetUserId: userId, status: "PENDING", block: false };
 
-      const friendsIds = requests.map((friend) =>
-        own ? friend.targetUserId : friend.requestUserId
-      );
+          const requests = await Friend.findAll({ where: friendsFilters });
 
-      let userFilters = {};
-      if (!!search) {
-        userFilters = {
-          [Op.or]: [
-            {
+          const friendsIds = requests.map((friend) =>
+            own ? friend.targetUserId : friend.requestUserId
+          );
+
+          let userFilters = {};
+          if (!!search) {
+            userFilters = {
+              [Op.or]: [
+                {
+                  id: { [Op.in]: friendsIds },
+                  username: {
+                    [Op.startsWith]: search,
+                  },
+                },
+                {
+                  id: { [Op.in]: friendsIds },
+                  email: {
+                    [Op.startsWith]: search,
+                  },
+                },
+              ],
+            };
+          } else {
+            userFilters = {
               id: { [Op.in]: friendsIds },
-              username: {
-                [Op.startsWith]: search,
-              },
-            },
-            {
-              id: { [Op.in]: friendsIds },
-              email: {
-                [Op.startsWith]: search,
-              },
-            },
-          ],
-        };
-      } else {
-        userFilters = {
-          id: { [Op.in]: friendsIds },
-        };
+            };
+          }
+
+          const users = await User.findAll({
+            where: userFilters,
+            order: sequelize.literal("username"),
+            offset: !!page ? page * ROW_LIMIT : 0,
+            limit: ROW_LIMIT,
+          });
+          const total = await User.count({ where: userFilters });
+          const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
+
+          return { users, totalPages, totalRecords: total };
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
       }
-
-      const users = await User.findAll({
-        where: userFilters,
-        order: sequelize.literal("username"),
-        offset: !!page ? page * ROW_LIMIT : 0,
-        limit: ROW_LIMIT,
-      });
-      const total = await User.count({ where: userFilters });
-      const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
-
-      return { users, totalPages, totalRecords: total };
     },
-    async listBlockedUsers(_, { excludeId, page, search }) {
-      const usersBlocked = await Friend.findAll({
-        where: {
-          targetUserId: excludeId,
-          block: true,
-        },
-      });
+    async listBlockedUsers(_, { page, search }, context) {
+      try {
+        if (context && context.id) {
+          const usersBlocked = await Friend.findAll({
+            where: {
+              targetUserId: context.id,
+              block: true,
+            },
+          });
 
-      const excludeIds = usersBlocked.map((friend) => friend.requestUserId);
-      excludeIds.push({ excludeId });
+          const excludeIds = usersBlocked.map((friend) => friend.requestUserId);
+          excludeIds.push(context.id);
 
-      let userFilters = {};
-      if (!!search) {
-        userFilters = {
-          [Op.or]: [
-            {
+          let userFilters = {};
+          if (!!search) {
+            userFilters = {
+              [Op.or]: [
+                {
+                  id: { [Op.in]: excludeIds },
+                  username: {
+                    [Op.startsWith]: search,
+                  },
+                },
+                {
+                  id: { [Op.in]: excludeIds },
+                  email: {
+                    [Op.startsWith]: search,
+                  },
+                },
+              ],
+            };
+          } else {
+            userFilters = {
               id: { [Op.in]: excludeIds },
-              username: {
-                [Op.startsWith]: search,
-              },
-            },
-            {
-              id: { [Op.in]: excludeIds },
-              email: {
-                [Op.startsWith]: search,
-              },
-            },
-          ],
-        };
-      } else {
-        userFilters = {
-          id: { [Op.in]: excludeIds },
-        };
+            };
+          }
+
+          const users = await User.findAll({
+            where: userFilters,
+            order: sequelize.literal("username"),
+            offset: !!page ? page * ROW_LIMIT : 0,
+            limit: ROW_LIMIT,
+          });
+          const total = await User.count({ where: userFilters });
+          const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
+
+          return { users, totalPages, totalRecords: total };
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
       }
-
-      const users = await User.findAll({
-        where: userFilters,
-        order: sequelize.literal("username"),
-        offset: !!page ? page * ROW_LIMIT : 0,
-        limit: ROW_LIMIT,
-      });
-      const total = await User.count({ where: userFilters });
-      const totalPages = total > 0 ? Math.ceil(total / ROW_LIMIT) : 0;
-
-      return { users, totalPages, totalRecords: total };
     },
-    async getPost(_, { id }) {
-      return await Post.findOne({
-        where: { id },
-      });
+    async getPost(_, { id }, context) {
+      try {
+        if (context && context.id) {
+          return await Post.findOne({
+            where: { id },
+          });
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
+      }
     },
-    async listPosts(_, { userId, page }) {
-      const posts = await Post.findAll({
-        where: { userId },
-        order: sequelize.literal("createdAt DESC"),
-        offset: !!page ? page * ROW_LIMIT : 0,
-        limit: ROW_LIMIT,
-      });
-      const totalPages = await getPostsCountById(userId);
+    async listPosts(_, { userId, page }, context) {
+      try {
+        if (context && context.id) {
+          const posts = await Post.findAll({
+            where: { userId },
+            order: sequelize.literal("createdAt DESC"),
+            offset: !!page ? page * ROW_LIMIT : 0,
+            limit: ROW_LIMIT,
+          });
+          const totalPages = await getPostsCountById(userId);
 
-      return { posts, totalPages };
+          return { posts, totalPages };
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
+      }
     },
-    async listFriendsPosts(_, { userId, page }) {
-      const ids = await getFriendsIds(userId);
+    async listFriendsPosts(_, { userId, page }, context) {
+      try {
+        if (context && context.id) {
+          const ids = await getFriendsIds(userId);
 
-      const posts = await Post.findAll({
-        where: { userId: { [Op.in]: ids } },
-        order: sequelize.literal("createdAt DESC"),
-        offset: !!page ? page * ROW_LIMIT : 0,
-        limit: ROW_LIMIT,
-      });
-      const totalPages = await getPostsCountById(ids);
+          const posts = await Post.findAll({
+            where: { userId: { [Op.in]: ids } },
+            order: sequelize.literal("createdAt DESC"),
+            offset: !!page ? page * ROW_LIMIT : 0,
+            limit: ROW_LIMIT,
+          });
+          const totalPages = await getPostsCountById(ids);
 
-      return { posts, totalPages };
+          return { posts, totalPages };
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
+      }
     },
   },
 
   Mutation: {
     async signup(_, args) {
-      const { email, password, secret, secretPassword } = args;
+      try {
+        const { email, password, secret, secretPassword } = args;
 
-      const user = await User.create({
-        email,
-        password: await bcrypt.hash(password, 10),
-        secret,
-        secretPassword: await bcrypt.hash(secretPassword, 10),
-      });
-      const totalPages = await getUsersCount();
+        const user = await User.create({
+          email,
+          password: await bcrypt.hash(password, 10),
+          secret,
+          secretPassword: await bcrypt.hash(secretPassword, 10),
+        });
+        const totalPages = await getUsersCount();
 
-      pubsub.publish("USER_CREATED", { userCreated: { user, totalPages } });
+        pubsub.publish("USER_CREATED", { userCreated: { user, totalPages } });
 
-      return user;
-    },
-    async updateProfile(_, args) {
-      const { id, username, email, image } = args;
-
-      await User.update({ username, email, image }, { where: { id } });
-
-      const user = await User.findOne({ where: { id } });
-      const totalPages = await getUsersCount();
-
-      pubsub.publish("USER_UPDATED", { userUpdated: { user, totalPages } });
-
-      return user;
+        return jsonwebtoken.sign(
+          {
+            user: {
+              id: user.id,
+              username: user.username,
+              email: user.email,
+              image: user.image,
+            },
+          },
+          JWT_SECRET,
+          {
+            expiresIn: "1d",
+          }
+        );
+      } catch (err) {
+        return err;
+      }
     },
     async recoverPassword(_, { email }) {
-      const user = await User.findOne({ where: { email } });
+      try {
+        const user = await User.findOne({ where: { email } });
 
-      if (!!user) {
-        const token = jsonwebtoken.sign({ user }, JWT_SECRET, {
-          expiresIn: "1h",
-        });
+        if (!!user) {
+          const token = jsonwebtoken.sign({ user }, JWT_SECRET, {
+            expiresIn: "1h",
+          });
+
+          return {
+            token,
+            secret: user.secret,
+          };
+        }
 
         return {
-          token,
-          secret: user.secret,
+          token: "",
+          secret: "",
         };
+      } catch (err) {
+        return err;
       }
-
-      return {
-        token: "",
-        secret: "",
-      };
     },
     async changePassword(_, args) {
-      const { id, secretPassword, oldPassword, newPassword, recoverToken } =
-        args;
-      const userToken = jsonwebtoken.verify(
-        recoverToken,
-        JWT_SECRET,
-        (err, decoded) => {
-          return !err && decoded;
-        }
-      );
-      let valid = false;
-      if (!!userToken) {
-        // Change password using recovery mode
-        valid = await bcrypt.compare(
-          secretPassword,
-          userToken.user.secretPassword
+      try {
+        const { id, secretPassword, oldPassword, newPassword, recoverToken } =
+          args;
+        const userToken = jsonwebtoken.verify(
+          recoverToken,
+          JWT_SECRET,
+          (err, decoded) => {
+            return !err && decoded;
+          }
         );
-        valid &&
-          (await User.update(
-            { password: newPassword },
-            { where: { id: userToken.user.id } }
-          ));
-      } else if (id) {
-        valid = await bcrypt.compare(newPassword, oldPassword);
-        valid && (await User.update({ password: newPassword }, { where: id }));
+        let valid = false;
+        if (!!userToken) {
+          // Change password using recovery mode
+          valid = await bcrypt.compare(
+            secretPassword,
+            userToken.user.secretPassword
+          );
+          valid &&
+            (await User.update(
+              { password: newPassword },
+              { where: { id: userToken.user.id } }
+            ));
+        } else if (id) {
+          valid = await bcrypt.compare(newPassword, oldPassword);
+          valid &&
+            (await User.update({ password: newPassword }, { where: id }));
+        }
+        return valid;
+      } catch (err) {
+        return err;
       }
-      return valid;
     },
-    async addFriend(_, args) {
-      const { requestId, targetId } = args;
+    async updateProfile(_, args, context) {
+      try {
+        if (context && context.id) {
+          const { id, username, email, image } = args;
 
-      const newFriend = await Friend.create({
-        requestUserId: requestId,
-        targetUserId: targetId,
-        status: "PENDING",
-        block: false,
-      });
+          await User.update({ username, email, image }, { where: { id } });
 
-      pubsub.publish("FRIENDS_CHANGED", {
-        friendsChange: {
-          friend: newFriend,
-          action: "add",
-        },
-      });
+          const user = await User.findOne({ where: { id } });
+          const totalPages = await getUsersCount();
 
-      return !!newFriend;
-    },
-    async updateFriend(_, args) {
-      const { id, status } = args;
+          pubsub.publish("USER_UPDATED", { userUpdated: { user, totalPages } });
 
-      const friendToUpdate = await Friend.findOne({ where: { id } });
+          return user;
+        }
 
-      if (status === "NONE") {
-        await Friend.destroy({ where: { id } });
-      } else {
-        await Friend.update({ status }, { where: { id } });
+        forbidenError();
+      } catch (err) {
+        return err;
       }
-
-      const friendId =
-        status === "NONE"
-          ? friendToUpdate.targetUserId
-          : friendToUpdate.requestUserId;
-
-      const user = await User.findOne({
-        where: { id: friendId },
-      });
-
-      const updatedFriend = await Friend.findOne({ where: { id } });
-      pubsub.publish("FRIENDS_CHANGED", {
-        friendsChange: {
-          friend: !!updatedFriend ? updatedFriend : friendToUpdate,
-          action: status === "NONE" ? "delete" : "change",
-        },
-      });
-
-      return user;
     },
-    async createPost(_, args) {
-      const { title, text, userId } = args;
+    async addFriend(_, args, context) {
+      try {
+        if (context && context.id) {
+          const { requestId, targetId } = args;
 
-      const post = await Post.create({ title, text, userId });
-      const totalPages = await getPostsCountById(userId);
-      pubsub.publish("POST_CREATED", { postCreated: { post, totalPages } });
+          const newFriend = await Friend.create({
+            requestUserId: requestId,
+            targetUserId: targetId,
+            status: "PENDING",
+            block: false,
+          });
 
-      const friendsIds = await getFriendsIds(userId);
-      const friendTotalPages = await getPostsCountById(friendsIds);
-      pubsub.publish("FRIENDS_POST_CHANGED", {
-        friendsPostsChanges: {
-          post,
-          action: "added",
-          ids: friendsIds,
-          totalPages: friendTotalPages,
-        },
-      });
+          pubsub.publish("FRIENDS_CHANGED", {
+            friendsChange: {
+              friend: newFriend,
+              action: "add",
+            },
+          });
 
-      return post;
-    },
-    async updatePost(_, args) {
-      const { id, title, text } = args;
+          return !!newFriend;
+        }
 
-      await Post.update({ title, text }, { where: { id } });
-
-      const post = await Post.findOne({
-        where: { id },
-      });
-      const totalPages = await getPostsCountById(userId);
-      pubsub.publish("POST_UPDATED", { postUpdated: { post, totalPages } });
-
-      const friendsIds = await getFriendsIds(post.userId);
-      const friendTotalPages = await getPostsCountById(friendsIds);
-      pubsub.publish("FRIENDS_POST_CHANGED", {
-        friendsPostsChanges: {
-          post,
-          action: "updated",
-          ids: friendsIds,
-          totalPages: friendTotalPages,
-        },
-      });
-
-      return post;
-    },
-    async deletePost(_, { id }) {
-      const post = await Post.findOne({ where: { id } });
-      if (post) {
-        await Post.destroy({ where: { id } });
-        const totalPages = await getPostsCountById(userId);
-        pubsub.publish("POST_DELETED", {
-          postDeleted: { id, userId: post.userId, totalPages },
-        });
-
-        const friendsIds = await getFriendsIds(post.userId);
-        const friendTotalPages = await getPostsCountById(friendsIds);
-        pubsub.publish("FRIENDS_POST_CHANGED", {
-          friendsPostsChanges: {
-            post,
-            action: "deleted",
-            ids: friendsIds,
-            totalPages: friendTotalPages,
-          },
-        });
-
-        return { id, userId: post.userId };
+        forbidenError();
+      } catch (err) {
+        return err;
       }
-      return null;
+    },
+    async updateFriend(_, args, context) {
+      try {
+        if (context && context.id) {
+          const { id, status, block } = args;
+
+          const friendToUpdate = await Friend.findOne({ where: { id } });
+
+          if (status === "NONE") {
+            await Friend.destroy({ where: { id } });
+          } else {
+            await Friend.update(
+              { status, block: !!block ? block : false },
+              { where: { id } }
+            );
+          }
+
+          const friendId =
+            status === "NONE"
+              ? friendToUpdate.targetUserId
+              : friendToUpdate.requestUserId;
+          block;
+
+          const user = await User.findOne({
+            where: { id: friendId },
+          });
+
+          const updatedFriend = await Friend.findOne({ where: { id } });
+          pubsub.publish("FRIENDS_CHANGED", {
+            friendsChange: {
+              friend: !!updatedFriend ? updatedFriend : friendToUpdate,
+              action: status === "NONE" ? "delete" : "change",
+            },
+          });
+
+          return user;
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
+      }
+    },
+    async createPost(_, args, context) {
+      try {
+        if (context && context.id) {
+          const { title, text, userId } = args;
+
+          const post = await Post.create({ title, text, userId });
+          const totalPages = await getPostsCountById(userId);
+          pubsub.publish("POST_CREATED", { postCreated: { post, totalPages } });
+
+          const friendsIds = await getFriendsIds(userId);
+          const friendTotalPages = await getPostsCountById(friendsIds);
+          pubsub.publish("FRIENDS_POST_CHANGED", {
+            friendsPostsChanges: {
+              post,
+              action: "added",
+              ids: friendsIds,
+              totalPages: friendTotalPages,
+            },
+          });
+
+          return post;
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
+      }
+    },
+    async updatePost(_, args, context) {
+      try {
+        if (context && context.id) {
+          const { id, title, text } = args;
+
+          await Post.update({ title, text }, { where: { id } });
+
+          const post = await Post.findOne({
+            where: { id },
+          });
+          const totalPages = await getPostsCountById(userId);
+          pubsub.publish("POST_UPDATED", { postUpdated: { post, totalPages } });
+
+          const friendsIds = await getFriendsIds(post.userId);
+          const friendTotalPages = await getPostsCountById(friendsIds);
+          pubsub.publish("FRIENDS_POST_CHANGED", {
+            friendsPostsChanges: {
+              post,
+              action: "updated",
+              ids: friendsIds,
+              totalPages: friendTotalPages,
+            },
+          });
+
+          return post;
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
+      }
+    },
+    async deletePost(_, { id }, context) {
+      try {
+        if (context && context.id) {
+          const post = await Post.findOne({ where: { id } });
+          if (post) {
+            await Post.destroy({ where: { id } });
+            const totalPages = await getPostsCountById(userId);
+            pubsub.publish("POST_DELETED", {
+              postDeleted: { id, userId: post.userId, totalPages },
+            });
+
+            const friendsIds = await getFriendsIds(post.userId);
+            const friendTotalPages = await getPostsCountById(friendsIds);
+            pubsub.publish("FRIENDS_POST_CHANGED", {
+              friendsPostsChanges: {
+                post,
+                action: "deleted",
+                ids: friendsIds,
+                totalPages: friendTotalPages,
+              },
+            });
+
+            return { id, userId: post.userId };
+          }
+          return null;
+        }
+
+        forbidenError();
+      } catch (err) {
+        return err;
+      }
     },
   },
   Subscription: {
@@ -529,14 +706,6 @@ const resolvers = {
     },
   },
 
-  Login: {
-    friends: async (parent) =>
-      await Friend.findAll({
-        where: {
-          [Op.or]: [{ requestUserId: parent.id }, { targetUserId: parent.id }],
-        },
-      }),
-  },
   User: {
     friend: async (parent, { id }) =>
       await Friend.findOne({
